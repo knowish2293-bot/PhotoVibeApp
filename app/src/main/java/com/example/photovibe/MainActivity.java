@@ -9,6 +9,7 @@ import android.net.Uri;
 import android.view.*;
 import android.widget.*;
 import android.content.ContentValues;
+import android.media.ExifInterface;
 import java.io.*;
 import java.text.SimpleDateFormat;
 import java.util.*;
@@ -18,9 +19,10 @@ public class MainActivity extends Activity {
     private ImageView preview;
     private Bitmap originalBitmap, filteredBitmap, exportBitmap;
     private int targetW = 0, targetH = 0;
+    private int rotationDegree = 0;
     private Uri lastSavedUri;
     private Button selectedPresetBtn, selectedSizeBtn;
-    private boolean showingOriginal = false;
+    private String currentPreset = "원본";
 
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
@@ -47,7 +49,6 @@ public class MainActivity extends Activity {
         pick.setOnClickListener(v -> pickImage());
         root.addView(pick);
 
-        // 미리보기
         preview = new ImageView(this);
         preview.setBackgroundColor(Color.rgb(40,40,40));
         preview.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -59,15 +60,60 @@ public class MainActivity extends Activity {
         compare.setTextColor(Color.WHITE);
         compare.setOnTouchListener((v, e) -> {
             if (e.getAction() == MotionEvent.ACTION_DOWN) {
-                if (originalBitmap != null) { preview.setImageBitmap(originalBitmap); }
+                if (originalBitmap != null) preview.setImageBitmap(rotateBitmap(originalBitmap, rotationDegree));
             } else if (e.getAction() == MotionEvent.ACTION_UP) {
-                if (exportBitmap != null) { preview.setImageBitmap(exportBitmap); }
+                if (exportBitmap != null) preview.setImageBitmap(exportBitmap);
             }
             return true;
         });
         root.addView(compare);
 
-        // 프리셋 섹션
+        // 회전 버튼
+        TextView rotTitle = tv("🔄 회전", 15, true);
+        rotTitle.setTextColor(Color.rgb(180,255,180));
+        root.addView(rotTitle);
+
+        LinearLayout rotRow = new LinearLayout(this);
+        rotRow.setOrientation(LinearLayout.HORIZONTAL);
+        Button rotLeft = btn("↺ 왼쪽 90°");
+        rotLeft.setBackgroundColor(Color.rgb(60,60,60));
+        rotLeft.setTextColor(Color.WHITE);
+        rotLeft.setOnClickListener(v -> rotate(-90));
+        Button rotRight = btn("↻ 오른쪽 90°");
+        rotRight.setBackgroundColor(Color.rgb(60,60,60));
+        rotRight.setTextColor(Color.WHITE);
+        rotRight.setOnClickListener(v -> rotate(90));
+        Button rotFlip = btn("↔ 좌우 반전");
+        rotFlip.setBackgroundColor(Color.rgb(60,60,60));
+        rotFlip.setTextColor(Color.WHITE);
+        rotFlip.setOnClickListener(v -> flipHorizontal());
+        rotRow.addView(rotLeft, new LinearLayout.LayoutParams(0,-2,1));
+        rotRow.addView(rotRight, new LinearLayout.LayoutParams(0,-2,1));
+        rotRow.addView(rotFlip, new LinearLayout.LayoutParams(0,-2,1));
+        root.addView(rotRow);
+
+        // 자르기 버튼
+        TextView cropTitle = tv("✂️ 자르기 비율", 15, true);
+        cropTitle.setTextColor(Color.rgb(255,220,100));
+        root.addView(cropTitle);
+
+        LinearLayout cropRow = new LinearLayout(this);
+        cropRow.setOrientation(LinearLayout.HORIZONTAL);
+        String[] cropLabels = {"1:1","4:3","16:9","3:4","9:16"};
+        float[] cropW = {1f, 4f, 16f, 3f, 9f};
+        float[] cropH = {1f, 3f, 9f, 4f, 16f};
+        for (int i = 0; i < cropLabels.length; i++) {
+            final float cw = cropW[i], ch = cropH[i];
+            final String label = cropLabels[i];
+            Button b = smallBtn(label);
+            b.setBackgroundColor(Color.rgb(60,50,30));
+            b.setTextColor(Color.WHITE);
+            b.setOnClickListener(v -> cropByRatio(cw, ch));
+            cropRow.addView(b, new LinearLayout.LayoutParams(0,-2,1));
+        }
+        root.addView(cropRow);
+
+        // 프리셋
         TextView presetTitle = tv("🎨 프리셋", 15, true);
         presetTitle.setTextColor(Color.rgb(255,180,100));
         root.addView(presetTitle);
@@ -94,6 +140,7 @@ public class MainActivity extends Activity {
                     if (selectedPresetBtn != null) selectedPresetBtn.setBackgroundColor(Color.rgb(50,50,50));
                     b.setBackgroundColor(Color.rgb(255,100,100));
                     selectedPresetBtn = b;
+                    currentPreset = p;
                     applyPreset(p);
                 });
                 rowLayout.addView(b, new LinearLayout.LayoutParams(0,-2,1));
@@ -101,7 +148,7 @@ public class MainActivity extends Activity {
             root.addView(rowLayout);
         }
 
-        // 사이즈 섹션
+        // 사이즈
         TextView sizeTitle = tv("📐 사이즈", 15, true);
         sizeTitle.setTextColor(Color.rgb(100,200,255));
         root.addView(sizeTitle);
@@ -146,6 +193,40 @@ public class MainActivity extends Activity {
         setContentView(scroll);
     }
 
+    private void rotate(int degree) {
+        if (originalBitmap == null) { toast("사진을 먼저 선택하세요"); return; }
+        rotationDegree = (rotationDegree + degree + 360) % 360;
+        originalBitmap = rotateBitmap(originalBitmap, degree);
+        applyPreset(currentPreset);
+    }
+
+    private void flipHorizontal() {
+        if (originalBitmap == null) { toast("사진을 먼저 선택하세요"); return; }
+        Matrix m = new Matrix(); m.preScale(-1, 1);
+        originalBitmap = Bitmap.createBitmap(originalBitmap, 0, 0, originalBitmap.getWidth(), originalBitmap.getHeight(), m, false);
+        applyPreset(currentPreset);
+    }
+
+    private Bitmap rotateBitmap(Bitmap src, int degree) {
+        Matrix m = new Matrix(); m.postRotate(degree);
+        return Bitmap.createBitmap(src, 0, 0, src.getWidth(), src.getHeight(), m, true);
+    }
+
+    private void cropByRatio(float rw, float rh) {
+        if (originalBitmap == null) { toast("사진을 먼저 선택하세요"); return; }
+        int sw = originalBitmap.getWidth(), sh = originalBitmap.getHeight();
+        int cw, ch;
+        if (sw / rw > sh / rh) {
+            ch = sh; cw = (int)(sh * rw / rh);
+        } else {
+            cw = sw; ch = (int)(sw * rh / rw);
+        }
+        int x = (sw - cw) / 2, y = (sh - ch) / 2;
+        originalBitmap = Bitmap.createBitmap(originalBitmap, x, y, cw, ch);
+        applyPreset(currentPreset);
+        toast(((int)rw) + ":" + ((int)rh) + " 자르기 완료");
+    }
+
     private TextView tv(String s, int sp, boolean bold) {
         TextView t=new TextView(this); t.setText(s); t.setTextSize(sp);
         t.setTextColor(Color.WHITE);
@@ -163,7 +244,17 @@ public class MainActivity extends Activity {
     @Override protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req,res,data);
         if(req==PICK_IMAGE&&res==RESULT_OK&&data!=null) {
-            try { originalBitmap=MediaStore.Images.Media.getBitmap(getContentResolver(),data.getData()); applyPreset("원본"); }
+            try {
+                originalBitmap=MediaStore.Images.Media.getBitmap(getContentResolver(),data.getData());
+                filteredBitmap=null;
+                exportBitmap=null;
+                lastSavedUri=null;
+                rotationDegree=0;
+                if(selectedPresetBtn!=null) selectedPresetBtn.setBackgroundColor(Color.rgb(50,50,50));
+                selectedPresetBtn=null;
+                currentPreset="원본";
+                applyPreset("원본");
+            }
             catch(Exception e) { toast("오류: "+e.getMessage()); }
         }
     }
@@ -223,104 +314,32 @@ public class MainActivity extends Activity {
     private Bitmap sepia(Bitmap src) {
         return adj(src,new ColorMatrix(new float[]{0.393f,0.769f,0.189f,0,0,0.349f,0.686f,0.168f,0,0,0.272f,0.534f,0.131f,0,0,0,0,0,1,0}),1.05f,4);
     }
-    private Bitmap warmFilm(Bitmap src) {
-        Bitmap b=adj(src,new ColorMatrix(),1.06f,6); return overlay(b,Color.rgb(255,180,80),24);
-    }
-    private Bitmap cinematic(Bitmap src) {
-        Bitmap b=adj(src,new ColorMatrix(),1.15f,-8); return overlay(b,Color.rgb(0,80,110),28);
-    }
-    private Bitmap kodakGold(Bitmap src) {
-        Bitmap b=adj(src,new ColorMatrix(),1.08f,10); return overlay(b,Color.rgb(255,200,50),30);
-    }
-    private Bitmap kodakPortra(Bitmap src) {
-        ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.9f);
-        Bitmap b=adj(src,cm,1.05f,8); return overlay(b,Color.rgb(255,220,180),20);
-    }
-    private Bitmap fujiSuperia(Bitmap src) {
-        ColorMatrix cm=new ColorMatrix(); cm.setSaturation(1.1f);
-        Bitmap b=adj(src,cm,1.05f,5); return overlay(b,Color.rgb(100,180,100),18);
-    }
-    private Bitmap fujiPro(Bitmap src) {
-        ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.85f);
-        Bitmap b=adj(src,cm,0.95f,15); return overlay(b,Color.rgb(200,230,255),22);
-    }
-    private Bitmap faded(Bitmap src) {
-        ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.7f);
-        return adj(src,cm,0.85f,25);
-    }
-    private Bitmap mori(Bitmap src) {
-        ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.8f);
-        Bitmap b=adj(src,cm,0.9f,30); return overlay(b,Color.rgb(255,255,240),35);
-    }
-    private Bitmap tokyoBlue(Bitmap src) {
-        ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.9f);
-        Bitmap b=adj(src,cm,1.1f,-5); return overlay(b,Color.rgb(50,80,180),30);
-    }
-    private Bitmap cityPop(Bitmap src) {
-        Bitmap b=adj(src,new ColorMatrix(),1.1f,5); return overlay(b,Color.rgb(180,80,200),28);
-    }
-    private Bitmap hongkong(Bitmap src) {
-        Bitmap b=adj(src,new ColorMatrix(),1.2f,-15); return overlay(b,Color.rgb(180,30,30),25);
-    }
-    private Bitmap y2k(Bitmap src) {
-        ColorMatrix cm=new ColorMatrix(); cm.setSaturation(1.4f);
-        return adj(src,cm,1.15f,15);
-    }
-    private Bitmap oppenheimer(Bitmap src) {
-        Bitmap b=adj(src,new ColorMatrix(),1.3f,-10);
-        b=overlay(b,Color.rgb(255,120,0),30);
-        return overlay(b,Color.rgb(0,100,120),20);
-    }
-    private Bitmap dune(Bitmap src) {
-        ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.8f);
-        Bitmap b=adj(src,cm,1.1f,8); return overlay(b,Color.rgb(220,180,100),35);
-    }
-    private Bitmap matrix(Bitmap src) {
-        ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.3f);
-        Bitmap b=adj(src,cm,1.1f,-10); return overlay(b,Color.rgb(0,180,50),35);
-    }
-    private Bitmap lalaland(Bitmap src) {
-        ColorMatrix cm=new ColorMatrix(); cm.setSaturation(1.1f);
-        Bitmap b=adj(src,cm,1.0f,10); return overlay(b,Color.rgb(255,180,220),25);
-    }
-    private Bitmap goldenHour(Bitmap src) {
-        Bitmap b=adj(src,new ColorMatrix(),1.1f,12); return overlay(b,Color.rgb(255,160,30),40);
-    }
-    private Bitmap dawn(Bitmap src) {
-        ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.8f);
-        Bitmap b=adj(src,cm,0.95f,-5); return overlay(b,Color.rgb(100,130,200),35);
-    }
-    private Bitmap vscoM5(Bitmap src) {
-        ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.85f);
-        Bitmap b=adj(src,cm,1.05f,12); return overlay(b,Color.rgb(200,150,100),22);
-    }
-    private Bitmap vscoF2(Bitmap src) {
-        ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.75f);
-        Bitmap b=adj(src,cm,0.9f,20); return overlay(b,Color.rgb(255,240,220),30);
-    }
-    private Bitmap vscoG3(Bitmap src) {
-        ColorMatrix cm=new ColorMatrix(); cm.setSaturation(1.05f);
-        Bitmap b=adj(src,cm,1.02f,5); return overlay(b,Color.rgb(120,160,100),15);
-    }
-    private Bitmap vscoC1(Bitmap src) {
-        ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.9f);
-        Bitmap b=adj(src,cm,1.05f,8); return overlay(b,Color.rgb(180,200,220),18);
-    }
-    private Bitmap sonyLog(Bitmap src) {
-        ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.7f);
-        return adj(src,cm,0.85f,30);
-    }
-    private Bitmap sonyVivid(Bitmap src) {
-        ColorMatrix cm=new ColorMatrix(); cm.setSaturation(1.4f);
-        return adj(src,cm,1.15f,5);
-    }
-    private Bitmap landscape(Bitmap src) {
-        ColorMatrix cm=new ColorMatrix(); cm.setSaturation(1.3f);
-        Bitmap b=adj(src,cm,1.1f,3); return overlay(b,Color.rgb(50,120,200),15);
-    }
-    private Bitmap night(Bitmap src) {
-        Bitmap b=adj(src,new ColorMatrix(),1.2f,-20); return overlay(b,Color.rgb(80,0,120),25);
-    }
+    private Bitmap warmFilm(Bitmap src) { Bitmap b=adj(src,new ColorMatrix(),1.06f,6); return overlay(b,Color.rgb(255,180,80),24); }
+    private Bitmap cinematic(Bitmap src) { Bitmap b=adj(src,new ColorMatrix(),1.15f,-8); return overlay(b,Color.rgb(0,80,110),28); }
+    private Bitmap kodakGold(Bitmap src) { Bitmap b=adj(src,new ColorMatrix(),1.08f,10); return overlay(b,Color.rgb(255,200,50),30); }
+    private Bitmap kodakPortra(Bitmap src) { ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.9f); Bitmap b=adj(src,cm,1.05f,8); return overlay(b,Color.rgb(255,220,180),20); }
+    private Bitmap fujiSuperia(Bitmap src) { ColorMatrix cm=new ColorMatrix(); cm.setSaturation(1.1f); Bitmap b=adj(src,cm,1.05f,5); return overlay(b,Color.rgb(100,180,100),18); }
+    private Bitmap fujiPro(Bitmap src) { ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.85f); Bitmap b=adj(src,cm,0.95f,15); return overlay(b,Color.rgb(200,230,255),22); }
+    private Bitmap faded(Bitmap src) { ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.7f); return adj(src,cm,0.85f,25); }
+    private Bitmap mori(Bitmap src) { ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.8f); Bitmap b=adj(src,cm,0.9f,30); return overlay(b,Color.rgb(255,255,240),35); }
+    private Bitmap tokyoBlue(Bitmap src) { ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.9f); Bitmap b=adj(src,cm,1.1f,-5); return overlay(b,Color.rgb(50,80,180),30); }
+    private Bitmap cityPop(Bitmap src) { Bitmap b=adj(src,new ColorMatrix(),1.1f,5); return overlay(b,Color.rgb(180,80,200),28); }
+    private Bitmap hongkong(Bitmap src) { Bitmap b=adj(src,new ColorMatrix(),1.2f,-15); return overlay(b,Color.rgb(180,30,30),25); }
+    private Bitmap y2k(Bitmap src) { ColorMatrix cm=new ColorMatrix(); cm.setSaturation(1.4f); return adj(src,cm,1.15f,15); }
+    private Bitmap oppenheimer(Bitmap src) { Bitmap b=adj(src,new ColorMatrix(),1.3f,-10); b=overlay(b,Color.rgb(255,120,0),30); return overlay(b,Color.rgb(0,100,120),20); }
+    private Bitmap dune(Bitmap src) { ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.8f); Bitmap b=adj(src,cm,1.1f,8); return overlay(b,Color.rgb(220,180,100),35); }
+    private Bitmap matrix(Bitmap src) { ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.3f); Bitmap b=adj(src,cm,1.1f,-10); return overlay(b,Color.rgb(0,180,50),35); }
+    private Bitmap lalaland(Bitmap src) { ColorMatrix cm=new ColorMatrix(); cm.setSaturation(1.1f); Bitmap b=adj(src,cm,1.0f,10); return overlay(b,Color.rgb(255,180,220),25); }
+    private Bitmap goldenHour(Bitmap src) { Bitmap b=adj(src,new ColorMatrix(),1.1f,12); return overlay(b,Color.rgb(255,160,30),40); }
+    private Bitmap dawn(Bitmap src) { ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.8f); Bitmap b=adj(src,cm,0.95f,-5); return overlay(b,Color.rgb(100,130,200),35); }
+    private Bitmap vscoM5(Bitmap src) { ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.85f); Bitmap b=adj(src,cm,1.05f,12); return overlay(b,Color.rgb(200,150,100),22); }
+    private Bitmap vscoF2(Bitmap src) { ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.75f); Bitmap b=adj(src,cm,0.9f,20); return overlay(b,Color.rgb(255,240,220),30); }
+    private Bitmap vscoG3(Bitmap src) { ColorMatrix cm=new ColorMatrix(); cm.setSaturation(1.05f); Bitmap b=adj(src,cm,1.02f,5); return overlay(b,Color.rgb(120,160,100),15); }
+    private Bitmap vscoC1(Bitmap src) { ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.9f); Bitmap b=adj(src,cm,1.05f,8); return overlay(b,Color.rgb(180,200,220),18); }
+    private Bitmap sonyLog(Bitmap src) { ColorMatrix cm=new ColorMatrix(); cm.setSaturation(0.7f); return adj(src,cm,0.85f,30); }
+    private Bitmap sonyVivid(Bitmap src) { ColorMatrix cm=new ColorMatrix(); cm.setSaturation(1.4f); return adj(src,cm,1.15f,5); }
+    private Bitmap landscape(Bitmap src) { ColorMatrix cm=new ColorMatrix(); cm.setSaturation(1.3f); Bitmap b=adj(src,cm,1.1f,3); return overlay(b,Color.rgb(50,120,200),15); }
+    private Bitmap night(Bitmap src) { Bitmap b=adj(src,new ColorMatrix(),1.2f,-20); return overlay(b,Color.rgb(80,0,120),25); }
 
     private void renderExport() {
         if(filteredBitmap==null) return;
@@ -350,7 +369,9 @@ public class MainActivity extends Activity {
     }
     private void shareTo(String pkg) {
         if(exportBitmap==null){ toast("공유할 사진 없음"); return; }
-        if(lastSavedUri==null) saveToGallery();
+        lastSavedUri=null;
+        saveToGallery();
+        if(lastSavedUri==null){ toast("저장 후 다시 시도해주세요"); return; }
         Intent send=new Intent(Intent.ACTION_SEND);
         send.setType("image/jpeg"); send.putExtra(Intent.EXTRA_STREAM,lastSavedUri);
         send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -359,4 +380,4 @@ public class MainActivity extends Activity {
         catch(Exception e){ send.setPackage(null); startActivity(Intent.createChooser(send,"공유")); }
     }
     private void toast(String s){ Toast.makeText(this,s,Toast.LENGTH_SHORT).show(); }
-        }
+}
