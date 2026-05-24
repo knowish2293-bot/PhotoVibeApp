@@ -6,7 +6,6 @@
     <application
         android:allowBackup="true"
         android:label="PhotoVibe"
-        android:theme="@style/AppTheme"
         android:resizeableActivity="true">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
